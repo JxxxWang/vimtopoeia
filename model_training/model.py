@@ -9,7 +9,7 @@ class Vimtopoeia_AST(nn.Module):
         # Load Pretrained AST (AudioSet)
         # This is critical for convergence on small datasets
         self.ast = ASTModel.from_pretrained(
-            "MIT/ast-finetuned-audioset-10-10-0.4593",
+            "/scratch/hw3140/vimtopoeia/ast_model_local",
             # attn_implementation="sdpa", # Enable if using torch >= 2.1.1 for speedup
         )
         
