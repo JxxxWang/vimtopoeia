@@ -1,4 +1,9 @@
 *.h5
+*.wav
+/v1_output_samples
+/output
+/paired_data_listening
+/extracted_audio
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,macos,linux,windows
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,macos,linux,windows
@@ -249,4 +254,4 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# End of https://www.toptal.com/developers/gitignore/api/python,macos,linux,windows
+# End of https://www.toptal.com/developers/gitignore/api/python,macos,linux,windowsast_model_local/
