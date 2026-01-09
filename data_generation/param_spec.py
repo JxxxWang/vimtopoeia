@@ -218,9 +218,8 @@ class NoteDurationParameter(Parameter):
         return 2
 
     def sample(self) -> Tuple[float, float]:
-        start, end = np.sort(
-            np.random.uniform(0.0, self.max_note_duration_seconds, size=2)
-        ).tolist()
+        start = random.uniform(0.0, min(0.5, self.max_note_duration_seconds))
+        end = random.uniform(start, self.max_note_duration_seconds)
 
         return start, end
 
@@ -323,12 +322,7 @@ class ParamSpec:
                 # Lock Discrete: Reference matches Target
                 ref_synth[p.name] = target_synth[p.name]
             elif isinstance(p, ContinuousParameter):
-                # Check for "Shape" or "Type" to lock them
-                # User requirement: Lock Oscillator Shape
                 name_lower = p.name.lower()
-                if "type" in name_lower:
-                    ref_synth[p.name] = target_synth[p.name]
-                    continue
 
                 # Perturb Continuous
                 val = target_synth[p.name]
@@ -342,7 +336,7 @@ class ParamSpec:
                 )
 
                 if is_adsr and random.random() < 0.5:
-                    # 30% chance to completely reset ADSR (sample from log-uniform distribution)
+                    # 50% chance to completely reset ADSR (sample from log-uniform distribution)
                     # User requested: sample_log_uniform(0.001, 1.0)
                     low = 0.001
                     high = 1.0

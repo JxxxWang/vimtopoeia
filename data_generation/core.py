@@ -46,6 +46,7 @@ def load_plugin(plugin_path: str) -> VST3Plugin:
     logger.info("Plugin ready")
     return p
 
+
 def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
     logger.info(f"Loading preset {preset_path}")
     plugin.load_preset(preset_path)
@@ -53,29 +54,15 @@ def load_preset(plugin: VST3Plugin, preset_path: str) -> None:
 
 
 def set_params(plugin: VST3Plugin, params: dict[str, float]) -> None:
-    # 1. Set critical topology parameters first to ensure correct parameter availability
-    priority_keys = ["a_osc_1_type", "a_filter_1_type", "a_filter_configuration"]
-    for k in priority_keys:
-        if k in params:
-            if k in plugin.parameters:
-                plugin.parameters[k].raw_value = params[k]
-            else:
-                logger.warning(f"Priority Parameter {k} not found in plugin!")
-
-    # 2. Set the rest of the parameters
     for k, v in params.items():
-        if k in priority_keys:
-            continue
-            
-        if k in plugin.parameters:
-            plugin.parameters[k].raw_value = v
-        else:
-            # Double check - sometimes parameter lists update after type changes
-            if k in plugin.parameters:
-                plugin.parameters[k].raw_value = v
-            else:
-                logger.warning(f"Parameter {k} not found in plugin. Skipping.")
-
+        plugin.parameters[k].raw_value = v
+    # for k, v in params.items():
+    #     if k in plugin.parameters:
+    #         plugin.parameters[k].raw_value = v
+    #         print(f"Set parameter {k} to {v}")
+    #     else:
+    #         print(plugin.parameters)
+    #         logger.warning(f"Parameter {k} not found in plugin. Skipping.")
 
 
 def write_wav(audio: np.ndarray, path: str, sample_rate: float, channels: int) -> None:

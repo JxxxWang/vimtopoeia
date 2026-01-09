@@ -1,87 +1,163 @@
 import torch
 import torchaudio
 import h5py
-import hdf5plugin
 import numpy as np
 import random
 from torch.utils.data import Dataset
 
-class VSTDataset(Dataset):
-    def __init__(self, h5_path, target_sr=16000, max_len_frames=1024):
-        self.h5_path = h5_path
-        self.target_sr = target_sr
-        self.max_len_frames = max_len_frames
-        
-        # 1. Init: Just get length, then CLOSE immediately
-        with h5py.File(h5_path, 'r') as f:
-            self.length = f["target_param_array"].shape[0]
-            
-        self.h5_file = None # Placeholder
-        
-        # 2. Indices
-        self.active_indices = [
-            0, 1, 2, 3,    # Amp Env
-            4, 5, 6,       # Filter 1
-            7, 8, 9,       # Filter 2
-            10, 11, 12, 13,# Filter Env
-            14,            # Highpass
-            15,            # Noise Volume
-            18, 19, 20,    # Osc Shapes
-            21, 22,        # Osc Mods
-            28             # Unison Detune
-        ]
-        
-        print(f"Dataset initialized. Length: {self.length}. Params: {len(self.active_indices)}")
-        
-        # 3. Transforms
-        self.resampler = torchaudio.transforms.Resample(orig_freq=44100, new_freq=16000)
-        self.mel_transform = torchaudio.transforms.MelSpectrogram(
-            sample_rate=target_sr, n_fft=1024, win_length=400, hop_length=160, 
-            n_mels=128, f_min=0, f_max=8000,
-        )
-        self.amp_to_db = torchaudio.transforms.AmplitudeToDB()
+# ==========================================
+# 1. Helper: Spectral Convolution
+# ==========================================
+def apply_spectral_convolution(audio, ir, mix_ratio=1.0):
+    """
+    Applies spectral convolution (Linear Convolution via FFT)
+    Audio: [C, T]
+    IR: [C, K]
+    """
+    if audio.dim() == 1: audio = audio.unsqueeze(0)
+    if ir.dim() == 1: ir = ir.unsqueeze(0)
+    
+    # 确保通道匹配
+    if audio.shape[0] != ir.shape[0]:
+        ir = ir.expand(audio.shape[0], -1)
 
-    # === ⚠️ 关键修复：添加这个方法解决 Pickle Error ===
+    n_step = audio.shape[-1]
+    n_ir = ir.shape[-1]
+    
+    n_fft = n_step + n_ir - 1
+    
+    # FFT
+    audio_f = torch.fft.rfft(audio, n=n_fft)
+    ir_f = torch.fft.rfft(ir, n=n_fft)
+    
+    # Multiply
+    convolved_f = audio_f * ir_f
+    
+    # IFFT
+    convolved = torch.fft.irfft(convolved_f, n=n_fft)
+    
+    # Crop to original length
+    convolved = convolved[..., :n_step]
+    
+    # Normalize (Match RMS)
+    original_rms = torch.sqrt(torch.mean(audio**2))
+    convolved_rms = torch.sqrt(torch.mean(convolved**2))
+    convolved = convolved * (original_rms / (convolved_rms + 1e-8))
+    
+    # Mix
+    if mix_ratio < 1.0:
+        return (1 - mix_ratio) * audio + mix_ratio * convolved
+    
+    return convolved
+
+# ==========================================
+# 2. Dataset Class (Fixed: All 44.1kHz)
+# ==========================================
+class VSTDataset(Dataset):
+    def __init__(self, h5_path, target_sr=44100, max_len_frames=1024, 
+                 subset='train', val_split=0.1, ir_files_list=None):
+        """
+        Args:
+            h5_path: Path to HDF5 dataset file
+            target_sr: 44100 (Defaulting to your native SR)
+            max_len_frames: Maximum spectrogram length
+        """
+        self.h5_path = h5_path
+        self.target_sr = target_sr # Now 44100
+        self.max_len_frames = max_len_frames
+        self.subset = subset
+        self.is_train = (subset == 'train')
+        
+        # 1. Init: Get total length
+        with h5py.File(h5_path, 'r') as f:
+            total_length = f["target_param_array"].shape[0]
+        
+        # 2. Calculate split
+        split_idx = int(total_length * (1 - val_split))
+        
+        if self.is_train:
+            self.start_idx = 0
+            self.length = split_idx
+        elif subset == 'val':
+            self.start_idx = split_idx
+            self.length = total_length - split_idx
+        else:
+            raise ValueError(f"subset must be 'train' or 'val', got '{subset}'")
+            
+        self.h5_file = None
+        
+        # 3. Preload IR files
+        self.ir_cache = []
+        if ir_files_list is not None and self.is_train:
+            print(f"Loading {len(ir_files_list)} impulse response files...")
+            for ir_path in ir_files_list:
+                try:
+                    # Load IR
+                    ir_waveform, ir_sr = torchaudio.load(ir_path)
+                    
+                    # Convert to mono
+                    if ir_waveform.shape[0] > 1:
+                        ir_waveform = torch.mean(ir_waveform, dim=0, keepdim=True)
+                        
+                    # 只在不匹配时才 Resample (既然你是 44.1k，这里通常不会触发)
+                    if ir_sr != self.target_sr:
+                        resampler = torchaudio.transforms.Resample(ir_sr, self.target_sr)
+                        ir_waveform = resampler(ir_waveform)
+                        
+                    self.ir_cache.append(ir_waveform)
+                except Exception as e:
+                    print(f"Warning: Failed to load IR {ir_path}: {e}")
+            print(f"Loaded {len(self.ir_cache)} IR files into cache (Target SR: {self.target_sr}).")
+        
+        print(f"Dataset initialized: subset='{subset}', length={self.length}")
+
+        # 4. Transforms
+        # 移除了 self.resampler，因为我们全程 44.1k
+        
+        self.mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.target_sr, # 44100
+            n_fft=1024,
+            win_length=1024,
+            hop_length=512,
+            n_mels=128
+        )
+        self.db_transform = torchaudio.transforms.AmplitudeToDB()
+
     def __getstate__(self):
-        # 当 DataLoader 试图复制这个 Dataset 到子进程时，Python 会调用这个方法
         state = self.__dict__.copy()
-        # 强制把 h5_file 设为 None，确保不传输打开的文件句柄
         state['h5_file'] = None
         return state
-    # ===============================================
 
     def __len__(self):
         return self.length
 
-    def _augment_audio(self, waveform):
-        gain = random.uniform(0.5, 1.2)
-        waveform = waveform * gain
-        if random.random() < 0.5: 
-            noise = torch.randn_like(waveform)
-            snr_db = random.uniform(25, 45) 
-            waveform = torchaudio.functional.add_noise(waveform, noise, torch.tensor([snr_db]))
-        return waveform
-
     def __getitem__(self, idx):
-        # Lazy Loading
         if self.h5_file is None:
             self.h5_file = h5py.File(self.h5_path, 'r')
 
-        waveform_target = torch.from_numpy(self.h5_file["target_audio"][idx]).float()
-        waveform_ref = torch.from_numpy(self.h5_file["reference_audio"][idx]).float()
+        actual_idx = self.start_idx + idx
         
-        waveform_target = self._augment_audio(waveform_target)
+        # 1. Load Audio (Original 44.1k)
+        target_audio = torch.from_numpy(self.h5_file["target_audio"][actual_idx]).float()
+        ref_audio = torch.from_numpy(self.h5_file["reference_audio"][actual_idx]).float()
+        
+        if target_audio.dim() == 1: target_audio = target_audio.unsqueeze(0)
+        if ref_audio.dim() == 1: ref_audio = ref_audio.unsqueeze(0)
 
-        p_target_full = torch.from_numpy(self.h5_file["target_param_array"][idx]).float()
-        p_ref_full = torch.from_numpy(self.h5_file["reference_param_array"][idx]).float()
-        
-        p_target = p_target_full[self.active_indices]
-        p_ref = p_ref_full[self.active_indices]
-        
+        # 2. Augmentation: Spectral Convolution (at full 44.1k resolution)
+        if self.is_train and self.ir_cache and random.random() < 0.8:
+            ir_sample = random.choice(self.ir_cache)
+            mix = random.uniform(0.6, 1.0)
+            target_audio = apply_spectral_convolution(target_audio, ir_sample, mix_ratio=mix)
+
+        # 3. Load Params & Label
+        p_target = torch.from_numpy(self.h5_file["target_param_array"][actual_idx]).float()
+        p_ref = torch.from_numpy(self.h5_file["reference_param_array"][actual_idx]).float()
         delta = p_target - p_ref
         
-        spec_target = self._process_audio(waveform_target)
-        spec_ref = self._process_audio(waveform_ref)
+        # 4. Generate Spectrograms
+        spec_target = self._spec_and_norm(target_audio)
+        spec_ref = self._spec_and_norm(ref_audio)
         
         one_hot = torch.tensor([0.0, 1.0, 0.0]) 
 
@@ -92,25 +168,24 @@ class VSTDataset(Dataset):
             "one_hot": one_hot
         }
 
-    def _process_audio(self, waveform):
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)
-        elif waveform.shape[0] > 1:
-            waveform = torch.mean(waveform, dim=0, keepdim=True)
-            
-        waveform = self.resampler(waveform)
+    def _spec_and_norm(self, waveform):
+        # Generate Mel Spec (Assuming input is 44.1k now)
         spec = self.mel_transform(waveform)
-        spec = self.amp_to_db(spec)
+        spec = self.db_transform(spec)
+        
+        # [Channels, n_mels, time] -> [time, n_mels]
         spec = spec.squeeze(0).transpose(0, 1)
         
+        # Padding
         if spec.shape[0] < self.max_len_frames:
             padding = torch.zeros(self.max_len_frames - spec.shape[0], 128)
             spec = torch.cat([spec, padding], dim=0)
         else:
             spec = spec[:self.max_len_frames, :]
             
-        mean = -4.2677393
-        std = 4.5689974
+        # Normalization
+        mean = -26.538128995895384
+        std = 39.86343679428101
         spec = (spec - mean) / (std * 2)
         
         return spec
