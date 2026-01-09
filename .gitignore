@@ -1,10 +1,11 @@
 *.h5
 *.wav
-/v1_output_samples
-/output
-/paired_data_listening
-/extracted_audio
-
+/OUTPUTS_datacheck
+/V1_outputs
+/V2_outputs
+*.pth
+*.pt
+*.out
 # Created by https://www.toptal.com/developers/gitignore/api/python,macos,linux,windows
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,macos,linux,windows
 
