@@ -93,7 +93,7 @@ class VSTDataset(Dataset):
             for ir_path in ir_files_list:
                 try:
                     # Load IR
-                    ir_waveform, ir_sr = torchaudio.load(ir_path)
+                    ir_waveform, ir_sr = torchaudio.load(ir_path, backend="soundfile")
                     
                     # Convert to mono
                     if ir_waveform.shape[0] > 1:
@@ -119,7 +119,8 @@ class VSTDataset(Dataset):
             n_fft=1024,
             win_length=1024,
             hop_length=512,
-            n_mels=128
+            n_mels=128,
+            f_min=20.0
         )
         self.db_transform = torchaudio.transforms.AmplitudeToDB()
 

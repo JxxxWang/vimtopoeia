@@ -20,9 +20,10 @@ echo "Loading modules..."
 
 source /share/apps/NYUAD5/miniconda/3-4.11.0/bin/activate
 conda activate venv
+cd /scratch/hw3140/roundtwo/vimtopoeia
 
 export HF_HUB_OFFLINE=1
-export HF_HOME=/scratch/hw3140/vimtopoeia/ast_model_local
+export HF_HOME=/scratch/hw3140/ast_model_local
 
 echo "Starting training..."
 
