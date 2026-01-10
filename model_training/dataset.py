@@ -169,11 +169,15 @@ class VSTDataset(Dataset):
         }
 
     def _spec_and_norm(self, waveform):
+        # Ensure mono
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
         # Generate Mel Spec (Assuming input is 44.1k now)
         spec = self.mel_transform(waveform)
         spec = self.db_transform(spec)
         
-        # [Channels, n_mels, time] -> [time, n_mels]
+        # [1, n_mels, time] -> [time, n_mels]
         spec = spec.squeeze(0).transpose(0, 1)
         
         # Padding
