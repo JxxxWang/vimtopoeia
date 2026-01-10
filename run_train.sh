@@ -4,7 +4,7 @@
 #SBATCH --error=sbatch/vimtopoeia_ast_%j.err
 #SBATCH --partition=nvidia
 #SBATCH --gres=gpu:a100:1
-#SBATCH --cpus-per-task=8            
+#SBATCH --cpus-per-task=4            
 #SBATCH --mem=64G                     
 #SBATCH --time=12:00:00      
 
