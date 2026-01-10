@@ -1,4 +1,12 @@
 #!/bin/bash
+#SBATCH --job-name=vimtopoeia_ast
+#SBATCH --output=sbatch/vimtopoeia_ast_%j.out
+#SBATCH --error=sbatch/vimtopoeia_ast_%j.err
+#SBATCH --partition=nvidia
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8            
+#SBATCH --mem=64G                     
+#SBATCH --time=12:00:00      
 
 # Usage: 
 #   For HPC (SLURM):  sbatch run_train.sh
@@ -9,14 +17,7 @@ MODE=${1:-hpc}  # Default to 'hpc' if no argument provided
 if [ "$MODE" == "hpc" ]; then
     echo "Running in HPC mode with SLURM..."
     
-    #SBATCH --job-name=vimtopoeia_ast
-    #SBATCH --output=vimtopoeia_ast_%j.out
-    #SBATCH --error=vimtopoeia_ast_%j.err
-    #SBATCH --partition=nvidia
-    #SBATCH --gres=gpu:a100:1
-    #SBATCH --cpus-per-task=8            
-    #SBATCH --mem=64G                     
-    #SBATCH --time=12:00:00              
+        
 
     module purge
     
