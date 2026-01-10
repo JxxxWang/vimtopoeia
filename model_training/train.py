@@ -12,6 +12,7 @@ import glob
 import os
 import random
 import hdf5plugin
+import argparse
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
@@ -19,7 +20,16 @@ sys.path.append(str(Path(__file__).parent))
 from dataset import VSTDataset
 from model import Vimtopoeia_AST
 
-def main():
+def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
+    """
+    Train the Vimtopoeia model.
+    
+    Args:
+        h5_path: Path to the HDF5 dataset file
+        ir_dir: Path to directory containing IR (impulse response) .wav files
+        checkpoints_dir: Path to directory where model checkpoints will be saved
+        ast_model_path: Path to pretrained AST model directory
+    """
     # 1. Device Selection
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -39,9 +49,6 @@ def main():
     NUM_WORKERS = 8         
     
     # 3. Dataset Setup
-    h5_path = "/scratch/hw3140/dataset_10k_pairs.h5" 
-    ir_dir = "/scratch/hw3140/vimtopoeia/datasets/vimsketch_synth_vocals"
-    
     print(f"Loading dataset from: {h5_path}")
     print(f"Loading IR files from: {ir_dir}")
     
@@ -89,14 +96,15 @@ def main():
     sample = train_dataset[0]
     n_params = sample['delta'].shape[0]
     print(f"Detected n_params: {n_params}")
+    print(f"Loading AST model from: {ast_model_path}")
     
-    model = Vimtopoeia_AST(n_params=n_params).to(device)
+    model = Vimtopoeia_AST(n_params=n_params, ast_model_path=ast_model_path).to(device)
     
     criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     # Setup directories
-    checkpoints_dir = Path("/scratch/hw3140/vimtopoeia/checkpoints")
+    checkpoints_dir = Path(checkpoints_dir)
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     
     # === NEW: Store loss history ===
@@ -202,7 +210,25 @@ def main():
         writer.writerow(['Epoch', 'Loss'])
         for i, loss in enumerate(loss_history):
             writer.writerow([i + 1, loss])
-    print(f"Loss data saved to: {csv_path}")
+    print(f"📊 Loss data saved to: {csv_path}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Train Vimtopoeia model')
+    
+    parser.add_argument('--h5_path', type=str, required=True,
+                        help='Path to HDF5 dataset file')
+    parser.add_argument('--ir_dir', type=str, required=True,
+                        help='Path to directory containing IR .wav files')
+    parser.add_argument('--checkpoints_dir', type=str, required=True,
+                        help='Path to directory for saving model checkpoints')
+    parser.add_argument('--ast_model_path', type=str, required=True,
+                        help='Path to pretrained AST model directory')
+    
+    args = parser.parse_args()
+    
+    main(
+        h5_path=args.h5_path,
+        ir_dir=args.ir_dir,
+        checkpoints_dir=args.checkpoints_dir,
+        ast_model_path=args.ast_model_path
+    )

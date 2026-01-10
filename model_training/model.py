@@ -4,13 +4,21 @@ from transformers import ASTConfig, ASTModel
 import hdf5plugin
 
 class Vimtopoeia_AST(nn.Module):
-    def __init__(self, n_params=22):
+    def __init__(self, n_params=22, ast_model_path=None):
+        """
+        Args:
+            n_params: Number of parameters to predict
+            ast_model_path: Path to pretrained AST model directory
+        """
         super().__init__()
+        
+        if ast_model_path is None:
+            raise ValueError("ast_model_path must be provided")
         
         # Load Pretrained AST (AudioSet)
         # This is critical for convergence on small datasets
         self.ast = ASTModel.from_pretrained(
-            "/scratch/hw3140/ast_model_local",
+            ast_model_path,
             # attn_implementation="sdpa", # Enable if using torch >= 2.1.1 for speedup
         )
         
