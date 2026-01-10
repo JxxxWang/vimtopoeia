@@ -11,6 +11,7 @@ import csv
 import glob
 import os
 import random
+import hdf5plugin
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))

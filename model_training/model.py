@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import ASTConfig, ASTModel
+import hdf5plugin
 
 class Vimtopoeia_AST(nn.Module):
     def __init__(self, n_params=22):

@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import random
 from torch.utils.data import Dataset
+import hdf5plugin
 
 # ==========================================
 # 1. Helper: Spectral Convolution
