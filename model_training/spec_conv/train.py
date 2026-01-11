@@ -47,7 +47,7 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     BATCH_SIZE = 16         
     LEARNING_RATE = 1e-4
     EPOCHS = 50
-    NUM_WORKERS = 1  # Use 1 worker to avoid "too many fds" error while still getting background loading         
+    NUM_WORKERS = 4  # Can use multiple workers now that IR file handles are properly closed         
     
     # 3. Dataset Setup
     print(f"Loading dataset from: {h5_path}")
