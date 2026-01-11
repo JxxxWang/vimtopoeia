@@ -18,7 +18,7 @@ import argparse
 sys.path.append(str(Path(__file__).parent))
 
 from dataset import VSTDataset
-from model import Vimtopoeia_AST
+from model_training.model import Vimtopoeia_AST
 
 def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     """
