@@ -157,12 +157,13 @@ class VimtopoeiaInference:
         print(f"✅ Detected MIDI Note: {midi_note} ({median_f0:.1f} Hz)")
         return midi_note
     
-    def generate_reference_params(self, midi_note: int = 60):
+    def generate_reference_params(self, midi_note: int = 60, duration: float = 4.0):
         """
         Generate a new set of random parameters and render reference audio.
         
         Args:
             midi_note: MIDI note to render (default: C4)
+            duration: Audio duration in seconds
             
         Returns:
             ref_params_dict: Dictionary of synth parameters
@@ -171,23 +172,25 @@ class VimtopoeiaInference:
         """
         print(f"🎲 Generating random synth parameters...")
         
-        # Sample random parameters from spec
-        ref_params_dict = self.param_spec.sample()
+        # Sample random parameters from spec (returns tuple of synth_params, note_params)
+        ref_params_dict, _ = self.param_spec.sample()
         
-        # Note parameters
+        # Note parameters (override with our MIDI note)
+        # Note duration is slightly shorter to avoid edge effects
+        note_duration = max(0.1, duration - 0.2)
         note_params = {
             'pitch': midi_note,
-            'note_start_and_end': (0.1, 1.9)  # 1.8s note
+            'note_start_and_end': (0.1, 0.1 + note_duration)
         }
         
-        print(f"🎹 Rendering reference audio at MIDI note {midi_note}...")
+        print(f"🎹 Rendering reference audio at MIDI note {midi_note} ({duration:.2f}s)...")
         ref_audio = render_params(
             plugin=self.plugin,
             params=ref_params_dict,
             midi_note=note_params['pitch'],
             velocity=100,
             note_start_and_end=note_params['note_start_and_end'],
-            signal_duration_seconds=2.0,
+            signal_duration_seconds=duration,
             sample_rate=self.target_sr,
             channels=2,
             preset_path=None
@@ -221,6 +224,41 @@ class VimtopoeiaInference:
             waveform = resampler(waveform)
         
         return waveform
+    
+    def normalize_audio(self, audio, target_db=-6.0):
+        """
+        Normalize audio to target peak level in dB.
+        
+        Args:
+            audio: Audio array (numpy or torch)
+            target_db: Target peak level in dB (default: -6dB for headroom)
+            
+        Returns:
+            normalized_audio: Normalized audio (same type as input)
+        """
+        is_torch = isinstance(audio, torch.Tensor)
+        
+        if is_torch:
+            audio_np = audio.cpu().numpy() if audio.is_cuda else audio.numpy()
+        else:
+            audio_np = audio
+        
+        # Find peak value
+        peak = np.abs(audio_np).max()
+        
+        if peak == 0:
+            return audio  # Silent audio, return as-is
+        
+        # Calculate gain to reach target dB
+        target_linear = 10 ** (target_db / 20.0)
+        gain = target_linear / peak
+        
+        normalized = audio_np * gain
+        
+        if is_torch:
+            return torch.from_numpy(normalized).to(audio.device)
+        else:
+            return normalized
     
     def apply_spectral_convolution(self, vocal, reference_audio, mix_ratio=0.8):
         """
@@ -329,7 +367,7 @@ class VimtopoeiaInference:
         
         return predicted_delta.squeeze(0).cpu()
     
-    def render_predicted_audio(self, ref_param_array, predicted_delta, midi_note=60):
+    def render_predicted_audio(self, ref_param_array, predicted_delta, midi_note=60, duration=2.0):
         """
         Render audio from predicted parameters.
         
@@ -337,6 +375,7 @@ class VimtopoeiaInference:
             ref_param_array: Reference parameter array
             predicted_delta: Predicted delta
             midi_note: MIDI note to render
+            duration: Audio duration in seconds
             
         Returns:
             audio: Rendered audio [channels, samples]
@@ -348,14 +387,17 @@ class VimtopoeiaInference:
         # Decode to parameter dictionary
         target_params_dict, note_params = self.param_spec.decode(target_param_array)
         
+        # Note duration is slightly shorter to avoid edge effects
+        note_duration = max(0.1, duration - 0.2)
+        
         # Render
         audio = render_params(
             plugin=self.plugin,
             params=target_params_dict,
             midi_note=midi_note,
             velocity=100,
-            note_start_and_end=(0.1, 1.9),
-            signal_duration_seconds=2.0,
+            note_start_and_end=(0.1, 0.1 + note_duration),
+            signal_duration_seconds=duration,
             sample_rate=self.target_sr,
             channels=2,
             preset_path=None
@@ -387,14 +429,23 @@ class VimtopoeiaInference:
         midi_note = self.get_pitch(vocal_path)
         
         print("\n" + "="*60)
-        print("STEP 2: Generate Reference Parameters & Audio")
+        print("STEP 2: Load Vocal Audio & Calculate Duration")
         print("="*60)
         
-        ref_params_dict, ref_param_array, ref_audio = self.generate_reference_params(midi_note)
+        vocal_waveform = self.load_vocal(vocal_path)
+        vocal_duration = vocal_waveform.shape[-1] / self.target_sr
+        print(f"📏 Vocal duration: {vocal_duration:.2f} seconds")
         
-        # Save reference audio
+        print("\n" + "="*60)
+        print("STEP 3: Generate Reference Parameters & Audio")
+        print("="*60)
+        
+        ref_params_dict, ref_param_array, ref_audio = self.generate_reference_params(midi_note, duration=vocal_duration)
+        
+        # Normalize and save reference audio
+        ref_audio_normalized = self.normalize_audio(ref_audio, target_db=-3.0)
         ref_audio_path = output_dir / "reference_synth.wav"
-        write_wav(ref_audio, str(ref_audio_path), self.target_sr, 2)
+        write_wav(ref_audio_normalized, str(ref_audio_path), self.target_sr, 2)
         print(f"💾 Saved reference audio: {ref_audio_path}")
         
         # Save reference parameters
@@ -402,12 +453,6 @@ class VimtopoeiaInference:
         with open(ref_params_path, 'w') as f:
             json.dump(ref_params_dict, f, indent=2)
         print(f"💾 Saved reference params: {ref_params_path}")
-        
-        print("\n" + "="*60)
-        print("STEP 3: Load Vocal Audio")
-        print("="*60)
-        
-        vocal_waveform = self.load_vocal(vocal_path)
         
         print("\n" + "="*60)
         print("STEP 4a: Direct Inference on Vocal")
@@ -424,12 +469,13 @@ class VimtopoeiaInference:
         
         # Render
         audio_direct, params_direct = self.render_predicted_audio(
-            ref_param_array, predicted_delta_direct, midi_note
+            ref_param_array, predicted_delta_direct, midi_note, duration=vocal_duration
         )
         
-        # Save
+        # Normalize and save
+        audio_direct_normalized = self.normalize_audio(audio_direct, target_db=-3.0)
         audio_direct_path = output_dir / "predicted_direct.wav"
-        write_wav(audio_direct, str(audio_direct_path), self.target_sr, 2)
+        write_wav(audio_direct_normalized, str(audio_direct_path), self.target_sr, 2)
         print(f"💾 Saved direct prediction audio: {audio_direct_path}")
         
         params_direct_path = output_dir / "predicted_direct_params.json"
@@ -437,9 +483,18 @@ class VimtopoeiaInference:
             json.dump(params_direct, f, indent=2)
         print(f"💾 Saved direct prediction params: {params_direct_path}")
         
-        # Save delta
-        delta_direct_path = output_dir / "predicted_direct_delta.npy"
-        np.save(delta_direct_path, predicted_delta_direct.numpy())
+        # Save delta as readable text file
+        delta_direct_path = output_dir / "predicted_direct_delta.txt"
+        with open(delta_direct_path, 'w') as f:
+            f.write("Parameter Deltas (Direct Inference)\n")
+            f.write("=" * 50 + "\n\n")
+            delta_array = predicted_delta_direct.numpy()
+            param_names = self.param_spec.synth_param_names
+            for i, val in enumerate(delta_array):
+                param_name = param_names[i] if i < len(param_names) else f"unknown_{i}"
+                f.write(f"Param {i:2d} ({param_name:30s}): {val:+.6f}\n")
+            f.write(f"\nMean delta: {delta_array.mean():.6f}\n")
+            f.write(f"Std delta:  {delta_array.std():.6f}\n")
         print(f"💾 Saved direct delta: {delta_direct_path}")
         
         print("\n" + "="*60)
@@ -451,11 +506,12 @@ class VimtopoeiaInference:
             vocal_waveform, ref_audio, mix_ratio=0.8
         )
         
-        # Save convolved audio for reference
+        # Normalize and save convolved audio for reference
+        convolved_normalized = self.normalize_audio(convolved_waveform, target_db=-3.0)
         convolved_audio_path = output_dir / "convolved_vocal.wav"
         torchaudio.save(
             convolved_audio_path, 
-            convolved_waveform.cpu(), 
+            convolved_normalized.cpu(), 
             self.target_sr
         )
         print(f"💾 Saved convolved vocal: {convolved_audio_path}")
@@ -469,12 +525,13 @@ class VimtopoeiaInference:
         
         # Render
         audio_conv, params_conv = self.render_predicted_audio(
-            ref_param_array, predicted_delta_conv, midi_note
+            ref_param_array, predicted_delta_conv, midi_note, duration=vocal_duration
         )
         
-        # Save
+        # Normalize and save
+        audio_conv_normalized = self.normalize_audio(audio_conv, target_db=-3.0)
         audio_conv_path = output_dir / "predicted_convolved.wav"
-        write_wav(audio_conv, str(audio_conv_path), self.target_sr, 2)
+        write_wav(audio_conv_normalized, str(audio_conv_path), self.target_sr, 2)
         print(f"💾 Saved convolved prediction audio: {audio_conv_path}")
         
         params_conv_path = output_dir / "predicted_convolved_params.json"
@@ -482,9 +539,18 @@ class VimtopoeiaInference:
             json.dump(params_conv, f, indent=2)
         print(f"💾 Saved convolved prediction params: {params_conv_path}")
         
-        # Save delta
-        delta_conv_path = output_dir / "predicted_convolved_delta.npy"
-        np.save(delta_conv_path, predicted_delta_conv.numpy())
+        # Save delta as readable text file
+        delta_conv_path = output_dir / "predicted_convolved_delta.txt"
+        with open(delta_conv_path, 'w') as f:
+            f.write("Parameter Deltas (Convolved Inference)\n")
+            f.write("=" * 50 + "\n\n")
+            delta_array = predicted_delta_conv.numpy()
+            param_names = self.param_spec.synth_param_names
+            for i, val in enumerate(delta_array):
+                param_name = param_names[i] if i < len(param_names) else f"unknown_{i}"
+                f.write(f"Param {i:2d} ({param_name:30s}): {val:+.6f}\n")
+            f.write(f"\nMean delta: {delta_array.mean():.6f}\n")
+            f.write(f"Std delta:  {delta_array.std():.6f}\n")
         print(f"💾 Saved convolved delta: {delta_conv_path}")
         
         print("\n" + "="*60)
