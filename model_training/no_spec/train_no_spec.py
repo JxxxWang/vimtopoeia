@@ -13,6 +13,7 @@ import argparse
 
 # Add current directory to path
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from dataset_no_spec import VSTDataset
 from model import Vimtopoeia_AST

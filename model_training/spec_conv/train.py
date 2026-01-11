@@ -14,11 +14,12 @@ import random
 import hdf5plugin
 import argparse
 
-# Add current directory to path
+# Add current and parent directories to path
 sys.path.append(str(Path(__file__).parent))
+sys.path.append(str(Path(__file__).parent.parent))
 
 from dataset import VSTDataset
-from model_training.model import Vimtopoeia_AST
+from model import Vimtopoeia_AST
 
 def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     """
