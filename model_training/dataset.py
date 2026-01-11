@@ -52,6 +52,56 @@ def apply_spectral_convolution(audio, ir, mix_ratio=1.0):
     return convolved
 
 # ==========================================
+# 1b. Helper: Audio Feature Extraction
+# ==========================================
+def get_audio_features(waveform, sample_rate):
+    """
+    Extract spectral centroid and bandwidth from audio.
+    
+    Args:
+        waveform: Audio tensor [C, T] or [T]
+        sample_rate: Sample rate
+        
+    Returns:
+        features: Tensor [2] containing [normalized_centroid, normalized_bandwidth]
+    """
+    if waveform.dim() == 2:
+        waveform = torch.mean(waveform, dim=0)  # Convert to mono
+    
+    # Compute STFT
+    n_fft = 2048
+    stft = torch.stft(
+        waveform,
+        n_fft=n_fft,
+        hop_length=512,
+        win_length=n_fft,
+        window=torch.hann_window(n_fft),
+        return_complex=True
+    )
+    
+    # Magnitude spectrum [freq_bins, time_frames]
+    mag = torch.abs(stft)
+    
+    # Average over time
+    mag_avg = torch.mean(mag, dim=1)  # [freq_bins]
+    
+    # Frequency bins in Hz
+    freq_bins = torch.linspace(0, sample_rate / 2, n_fft // 2 + 1)
+    
+    # Spectral Centroid: weighted average of frequencies
+    total_mag = torch.sum(mag_avg) + 1e-8
+    centroid = torch.sum(freq_bins * mag_avg) / total_mag
+    
+    # Spectral Bandwidth: std dev around centroid
+    bandwidth = torch.sqrt(torch.sum(mag_avg * (freq_bins - centroid) ** 2) / total_mag)
+    
+    # Normalize to roughly 0-1 range
+    centroid_norm = centroid / 10000.0
+    bandwidth_norm = bandwidth / 5000.0
+    
+    return torch.tensor([centroid_norm, bandwidth_norm], dtype=torch.float32)
+
+# ==========================================
 # 2. Dataset Class (Fixed: All 44.1kHz)
 # ==========================================
 class VSTDataset(Dataset):
@@ -87,10 +137,13 @@ class VSTDataset(Dataset):
             
         self.h5_file = None
         
-        # 3. Preload IR files
+        # 3. Preload IR files and compute features (for both train and val)
         self.ir_cache = []
-        if ir_files_list is not None and self.is_train:
-            print(f"Loading {len(ir_files_list)} impulse response files...")
+        self.ir_features = None
+        if ir_files_list is not None:
+            subset_name = "train" if self.is_train else "validation"
+            print(f"Loading {len(ir_files_list)} impulse response files for {subset_name}...")
+            ir_features_list = []
             for ir_path in ir_files_list:
                 try:
                     # Load IR
@@ -100,15 +153,24 @@ class VSTDataset(Dataset):
                     if ir_waveform.shape[0] > 1:
                         ir_waveform = torch.mean(ir_waveform, dim=0, keepdim=True)
                         
-                    # 只在不匹配时才 Resample (既然你是 44.1k，这里通常不会触发)
+                    # Resample if needed
                     if ir_sr != self.target_sr:
                         resampler = torchaudio.transforms.Resample(ir_sr, self.target_sr)
                         ir_waveform = resampler(ir_waveform)
-                        
+                    
+                    # Compute spectral features
+                    features = get_audio_features(ir_waveform, self.target_sr)
+                    ir_features_list.append(features)
+                    
                     self.ir_cache.append(ir_waveform)
                 except Exception as e:
                     print(f"Warning: Failed to load IR {ir_path}: {e}")
-            print(f"Loaded {len(self.ir_cache)} IR files into cache (Target SR: {self.target_sr}).")
+            
+            if ir_features_list:
+                self.ir_features = torch.stack(ir_features_list)  # [N, 2]
+            
+            subset_name = "train" if self.is_train else "validation"
+            print(f"Loaded {len(self.ir_cache)} IR files with features for {subset_name} (Target SR: {self.target_sr}).")
         
         print(f"Dataset initialized: subset='{subset}', length={self.length}")
 
@@ -146,11 +208,27 @@ class VSTDataset(Dataset):
         if target_audio.dim() == 1: target_audio = target_audio.unsqueeze(0)
         if ref_audio.dim() == 1: ref_audio = ref_audio.unsqueeze(0)
 
-        # 2. Augmentation: Spectral Convolution (at full 44.1k resolution)
-        if self.is_train and self.ir_cache and random.random() < 0.8:
-            ir_sample = random.choice(self.ir_cache)
-            mix = random.uniform(0.6, 1.0)
-            target_audio = apply_spectral_convolution(target_audio, ir_sample, mix_ratio=mix)
+        # 2. Augmentation: Spectral Convolution with Soulmate IR Matching
+        # Training: 80% probability, mix ratio 0.3-0.7 (centered on 0.5)
+        # Validation: 100% probability, deterministic mix ratio 0.5
+        if self.ir_cache and self.ir_features is not None:
+            # Determine if we should apply augmentation
+            should_augment = random.random() < 0.8 if self.is_train else True
+            
+            if should_augment:
+                # Compute features for current synth audio
+                synth_features = get_audio_features(target_audio, self.target_sr)  # [2]
+                
+                # Find soulmate IR: minimum Euclidean distance
+                distances = torch.norm(self.ir_features - synth_features.unsqueeze(0), dim=1)  # [N]
+                soulmate_idx = torch.argmin(distances).item()
+                
+                # Use the matched IR
+                ir_sample = self.ir_cache[soulmate_idx]
+                
+                # Mix ratio: training is random (0.3-0.7), validation is deterministic (0.5)
+                mix = random.uniform(0.3, 0.7) if self.is_train else 0.5
+                target_audio = apply_spectral_convolution(target_audio, ir_sample, mix_ratio=mix)
 
         # 3. Load Params & Label
         p_target = torch.from_numpy(self.h5_file["target_param_array"][actual_idx]).float()

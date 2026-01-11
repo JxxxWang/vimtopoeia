@@ -108,7 +108,8 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     
     # === NEW: Store loss history ===
-    loss_history = [] 
+    train_loss_history = []
+    val_loss_history = []
     best_loss = float('inf')
 
     # 5. Training Loop
@@ -145,8 +146,8 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
         avg_loss = epoch_loss / len(train_loader)
         epoch_time = time.time() - epoch_start
         
-        # === NEW: Record Loss ===
-        loss_history.append(avg_loss)
+        # === NEW: Record Train Loss ===
+        train_loss_history.append(avg_loss)
     
         # ==========================
         # 6. Validation Loop (NEW)
@@ -167,6 +168,7 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
                 val_running_loss += v_loss.item()
         
         avg_val_loss = val_running_loss / len(val_loader)
+        val_loss_history.append(avg_val_loss)
         model.train()  # Switch back to train mode for next epoch!
         
         # Update your print statement to show both
@@ -191,8 +193,9 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     
     # 1. Plot the graph
     plt.figure(figsize=(10, 6))
-    plt.plot(range(1, EPOCHS + 1), loss_history, label='Training Loss', marker='o')
-    plt.title('Vimtopoeia Training Loss')
+    plt.plot(range(1, EPOCHS + 1), train_loss_history, label='Training Loss', marker='o')
+    plt.plot(range(1, EPOCHS + 1), val_loss_history, label='Validation Loss', marker='s')
+    plt.title('Vimtopoeia Training & Validation Loss')
     plt.xlabel('Epochs')
     plt.ylabel('MSE Loss')
     plt.grid(True)
@@ -207,9 +210,9 @@ def main(h5_path: str, ir_dir: str, checkpoints_dir: str, ast_model_path: str):
     csv_path = checkpoints_dir / "loss_history.csv"
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Epoch', 'Loss'])
-        for i, loss in enumerate(loss_history):
-            writer.writerow([i + 1, loss])
+        writer.writerow(['Epoch', 'Train_Loss', 'Val_Loss'])
+        for i in range(len(train_loss_history)):
+            writer.writerow([i + 1, train_loss_history[i], val_loss_history[i]])
     print(f"📊 Loss data saved to: {csv_path}")
 
 if __name__ == "__main__":
