@@ -36,7 +36,7 @@ if [ "$MODE" == "hpc" ]; then
     AST_MODEL_PATH="/scratch/hw3140/ast_model_local"
     
     echo "Starting BASELINE (No Spec) training on HPC..."
-    python -u model_training/train_no_spec.py \
+    python -u model_training/no_spec/train_no_spec.py \
         --h5_path "$H5_PATH" \
         --checkpoints_dir "$CHECKPOINTS_DIR" \
         --ast_model_path "$AST_MODEL_PATH"

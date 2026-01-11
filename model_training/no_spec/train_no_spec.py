@@ -43,7 +43,7 @@ def main(h5_path: str, checkpoints_dir: str, ast_model_path: str):
     BATCH_SIZE = 16         
     LEARNING_RATE = 1e-4
     EPOCHS = 50
-    NUM_WORKERS = 4         
+    NUM_WORKERS = 1         
     
     # 3. Dataset Setup
     print(f"Loading dataset from: {h5_path}")
