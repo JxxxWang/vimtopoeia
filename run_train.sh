@@ -34,7 +34,7 @@ if [ "$MODE" == "hpc" ]; then
     # HPC paths
     H5_PATH="./dataset_4k_pair.h5"
     IR_DIR="/scratch/hw3140/vimtopoeia/datasets/vimsketch_synth_vocals"
-    CHECKPOINTS_DIR="./checkpoints"
+    CHECKPOINTS_DIR="./checkpoints/v4"
     AST_MODEL_PATH="/scratch/hw3140/ast_model_local"
     
     echo "Starting training on HPC..."
