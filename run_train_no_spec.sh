@@ -51,11 +51,11 @@ elif [ "$MODE" == "local" ]; then
     
     # Local paths
     H5_PATH="./dataset_4k_pair.h5"
-    CHECKPOINTS_DIR="./model_training/checkpoints_no_spec"
+    CHECKPOINTS_DIR="./model_training/no_spec/checkpoints_no_spec"
     AST_MODEL_PATH="/Users/wanghuixi/ast_model_local"
     
     echo "Starting BASELINE (No Spec) training locally..."
-    python model_training/train_no_spec.py \
+    python model_training/no_spec/train_no_spec.py \
         --h5_path "$H5_PATH" \
         --checkpoints_dir "$CHECKPOINTS_DIR" \
         --ast_model_path "$AST_MODEL_PATH"

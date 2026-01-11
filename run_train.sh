@@ -38,7 +38,7 @@ if [ "$MODE" == "hpc" ]; then
     AST_MODEL_PATH="/scratch/hw3140/ast_model_local"
     
     echo "Starting training on HPC..."
-    python -u model_training/train.py \
+    python -u model_training/spec_conv/train.py \
         --h5_path "$H5_PATH" \
         --ir_dir "$IR_DIR" \
         --checkpoints_dir "$CHECKPOINTS_DIR" \
@@ -59,7 +59,7 @@ elif [ "$MODE" == "local" ]; then
     AST_MODEL_PATH="/Users/wanghuixi/ast_model_local"  # Adjust to your local AST model path
     
     echo "Starting training locally..."
-    python model_training/train.py \
+    python model_training/spec_conv/train.py \
         --h5_path "$H5_PATH" \
         --ir_dir "$IR_DIR" \
         --checkpoints_dir "$CHECKPOINTS_DIR" \
