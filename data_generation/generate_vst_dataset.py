@@ -332,7 +332,7 @@ def make_dataset(
     sample_batch = []
     current_idx = start_idx
     
-    num_workers = min(multiprocessing.cpu_count(), 8)
+    num_workers = min(multiprocessing.cpu_count(), 4)  # Reduced to prevent memory issues
     samples_to_generate = num_samples - start_idx
     
     if samples_to_generate <= 0:
@@ -341,38 +341,62 @@ def make_dataset(
 
     logger.info(f"Starting parallel generation: {samples_to_generate} samples, {num_workers} workers.")
 
+    # Process in chunks to avoid memory overflow
+    chunk_size = 500  # Process 500 samples at a time
+    
     with ProcessPoolExecutor(max_workers=num_workers, initializer=worker_init, initargs=(plugin_path,)) as executor:
-        futures = []
-        for _ in range(samples_to_generate):
-            futures.append(executor.submit(
-                worker_generate_sample,
-                velocity,
-                signal_duration_seconds,
-                sample_rate,
-                channels,
-                min_loudness,
-                param_spec,
-                preset_path,
-            ))
+        for chunk_start in range(0, samples_to_generate, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, samples_to_generate)
+            chunk_samples = chunk_end - chunk_start
             
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating samples"):
-            try:
-                sample = future.result()
-                sample_batch.append(sample)
+            logger.info(f"Processing chunk: {chunk_start} to {chunk_end} ({chunk_samples} samples)")
+            
+            futures = []
+            for _ in range(chunk_samples):
+                futures.append(executor.submit(
+                    worker_generate_sample,
+                    velocity,
+                    signal_duration_seconds,
+                    sample_rate,
+                    channels,
+                    min_loudness,
+                    param_spec,
+                    preset_path,
+                ))
                 
-                if len(sample_batch) >= sample_batch_size:
-                    save_samples(
-                        sample_batch,
-                        target_audio_ds,
-                        ref_audio_ds,
-                        target_param_ds,
-                        ref_param_ds,
-                        current_idx,
-                    )
-                    current_idx += len(sample_batch)
-                    sample_batch = []
-            except Exception as e:
-                logger.error(f"Sample generation failed: {e}")
+            for future in tqdm(as_completed(futures), total=len(futures), desc=f"Chunk {chunk_start//chunk_size + 1}"):
+                try:
+                    sample = future.result()
+                    sample_batch.append(sample)
+                    
+                    if len(sample_batch) >= sample_batch_size:
+                        save_samples(
+                            sample_batch,
+                            target_audio_ds,
+                            ref_audio_ds,
+                            target_param_ds,
+                            ref_param_ds,
+                            current_idx,
+                        )
+                        current_idx += len(sample_batch)
+                        sample_batch = []
+                        hdf5_file.flush()  # Flush to disk after each batch
+                except Exception as e:
+                    logger.error(f"Sample generation failed: {e}")
+            
+            # Save any remaining samples from this chunk
+            if len(sample_batch) > 0:
+                save_samples(
+                    sample_batch,
+                    target_audio_ds,
+                    ref_audio_ds,
+                    target_param_ds,
+                    ref_param_ds,
+                    current_idx,
+                )
+                current_idx += len(sample_batch)
+                sample_batch = []
+                hdf5_file.flush()
 
     if len(sample_batch) > 0:
         save_samples(
@@ -383,6 +407,7 @@ def make_dataset(
             ref_param_ds,
             current_idx,
         )
+        hdf5_file.flush()
 
 
 @click.command()
@@ -394,7 +419,7 @@ def make_dataset(
 @click.option("--channels", "-c", type=int, default=2)
 @click.option("--velocity", "-v", type=int, default=100)
 @click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
-@click.option("--min_loudness", "-l", type=float, default=-30.0)
+@click.option("--min_loudness", "-l", type=float, default=-40.0)
 @click.option("--param_spec", "-t", type=str, default="surge_simple")
 @click.option("--sample_batch_size", "-b", type=int, default=32)
 def main(
@@ -406,7 +431,7 @@ def main(
     channels: int = 2,
     velocity: int = 100,
     signal_duration_seconds: float = 4.0,
-    min_loudness: float = -30.0,
+    min_loudness: float = -40.0,
     param_spec: str = "surge_simple",
     sample_batch_size: int = 32,
 ):
