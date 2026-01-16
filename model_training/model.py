@@ -31,7 +31,7 @@ class Vimtopoeia_AST(nn.Module):
             nn.Linear(512, n_params)
         )
 
-    def forward(self, spec_vocal, spec_ref, osc_one_hot):
+    def forward(self, spec_vocal, spec_ref, osc_one_hot, return_embedding=False):
         # spec_vocal: [B, 1024, 128]
         # AST expects: [B, 1024, 128]
         
@@ -40,7 +40,12 @@ class Vimtopoeia_AST(nn.Module):
         vocal_out = self.ast(spec_vocal).pooler_output # [B, 768]
         ref_out = self.ast(spec_ref).pooler_output     # [B, 768]
         
-        # Concatenate
+        # Concatenate to get feature vector [B, 768 + 768 + 3 = 1539]
         combined = torch.cat([vocal_out, ref_out, osc_one_hot], dim=1)
         
-        return self.fc(combined)
+        if return_embedding:
+            # Return raw feature vector
+            return combined
+        else:
+            # Pass through MLP head to predict parameters
+            return self.fc(combined)
