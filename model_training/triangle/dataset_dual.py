@@ -28,10 +28,14 @@ class DualDataset(Dataset):
         h5_path: str | Path,
         vimsketch_root: str | Path,
         shuffle_surge: bool = True,
-        seed: int = 42
+        seed: int = 42,
+        target_sr: int = 44100,
+        max_len_frames: int = 1024
     ):
         self.h5_path = Path(h5_path)
         self.vimsketch_root = Path(vimsketch_root)
+        self.target_sr = target_sr
+        self.max_len_frames = max_len_frames
         
         # Load SurgeXT dataset size
         with h5py.File(self.h5_path, 'r') as f:
@@ -45,6 +49,17 @@ class DualDataset(Dataset):
         
         # Build VimSketch pairs
         self.pairs = self._build_sketch_pairs()
+        
+        # Mel spectrogram transforms
+        self.mel_transform = torchaudio.transforms.MelSpectrogram(
+            sample_rate=self.target_sr,
+            n_fft=1024,
+            win_length=1024,
+            hop_length=512,
+            n_mels=128,
+            f_min=20.0
+        )
+        self.db_transform = torchaudio.transforms.AmplitudeToDB()
         
         print(f"DualDataset initialized:")
         print(f"  SurgeXT samples: {self.surge_size}")
@@ -105,25 +120,68 @@ class DualDataset(Dataset):
         """Dataset size is determined by SurgeXT (larger dataset)."""
         return self.surge_size
     
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor | np.ndarray]:
+    def _spec_and_norm(self, waveform: torch.Tensor) -> torch.Tensor:
         """
-        Load samples from both datasets.
+        Convert waveform to normalized Mel spectrogram for AST.
+        
+        Args:
+            waveform: Audio tensor, shape (channels, samples) or (samples,)
+            
+        Returns:
+            Normalized Mel spectrogram, shape (max_len_frames, n_mels=128)
+        """
+        # Ensure correct shape
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)  # (samples,) -> (1, samples)
+        
+        # Ensure mono
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Generate Mel Spec
+        spec = self.mel_transform(waveform)
+        spec = self.db_transform(spec)
+        
+        # [1, n_mels, time] -> [time, n_mels]
+        spec = spec.squeeze(0).transpose(0, 1)
+        
+        # Padding or truncation
+        if spec.shape[0] < self.max_len_frames:
+            padding = torch.zeros(self.max_len_frames - spec.shape[0], 128)
+            spec = torch.cat([spec, padding], dim=0)
+        else:
+            spec = spec[:self.max_len_frames, :]
+        
+        # Normalization (using AST normalization stats)
+        mean = -26.538128995895384
+        std = 39.86343679428101
+        spec = (spec - mean) / (std * 2)
+        
+        return spec
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """
+        Load samples from both datasets and convert to normalized Mel spectrograms.
         
         Args:
             idx: Index for SurgeXT dataset
             
         Returns:
             Dict with keys:
-                - surge_audio: (channels, samples) or (samples,)
-                - surge_params: (num_params,)
-                - sketch_vocal: (channels, samples) or (samples,)
-                - sketch_synth: (channels, samples) or (samples,)
+                - surge_spec: (max_len_frames, 128) - Normalized Mel spectrogram
+                - surge_params: (num_params,) - SurgeXT parameters
+                - sketch_vocal_spec: (max_len_frames, 128) - Normalized Mel spectrogram
+                - sketch_synth_spec: (max_len_frames, 128) - Normalized Mel spectrogram
         """
         # Load SurgeXT sample
         surge_idx = self.surge_indices[idx]
         with h5py.File(self.h5_path, 'r') as f:
             surge_audio = f['audio'][surge_idx]
             surge_params = f['parameters'][surge_idx]
+        
+        # Convert to tensor
+        surge_audio = torch.from_numpy(surge_audio) if isinstance(surge_audio, np.ndarray) else surge_audio
+        surge_params = torch.from_numpy(surge_params) if isinstance(surge_params, np.ndarray) else surge_params
         
         # Load VimSketch pair (loop over smaller dataset)
         sketch_idx = idx % len(self.pairs)
@@ -132,17 +190,24 @@ class DualDataset(Dataset):
         sketch_vocal, sr_vocal = torchaudio.load(vocal_path)
         sketch_synth, sr_synth = torchaudio.load(synth_path)
         
-        # Squeeze if mono
-        if sketch_vocal.shape[0] == 1:
-            sketch_vocal = sketch_vocal.squeeze(0)
-        if sketch_synth.shape[0] == 1:
-            sketch_synth = sketch_synth.squeeze(0)
+        # Resample VimSketch audio to target_sr if needed
+        if sr_vocal != self.target_sr:
+            resampler = torchaudio.transforms.Resample(sr_vocal, self.target_sr)
+            sketch_vocal = resampler(sketch_vocal)
+        if sr_synth != self.target_sr:
+            resampler = torchaudio.transforms.Resample(sr_synth, self.target_sr)
+            sketch_synth = resampler(sketch_synth)
+        
+        # Convert all audio to normalized Mel spectrograms
+        surge_spec = self._spec_and_norm(surge_audio)
+        sketch_vocal_spec = self._spec_and_norm(sketch_vocal)
+        sketch_synth_spec = self._spec_and_norm(sketch_synth)
         
         return {
-            'surge_audio': torch.from_numpy(surge_audio) if isinstance(surge_audio, np.ndarray) else surge_audio,
-            'surge_params': torch.from_numpy(surge_params) if isinstance(surge_params, np.ndarray) else surge_params,
-            'sketch_vocal': sketch_vocal,
-            'sketch_synth': sketch_synth,
+            'surge_spec': surge_spec,
+            'surge_params': surge_params,
+            'sketch_vocal_spec': sketch_vocal_spec,
+            'sketch_synth_spec': sketch_synth_spec,
         }
 
 
@@ -155,9 +220,9 @@ if __name__ == '__main__':
         dataset = DualDataset(h5_path, vimsketch_root)
         print(f"\nLoading sample 0...")
         sample = dataset[0]
-        print(f"  surge_audio: {sample['surge_audio'].shape}")
+        print(f"  surge_spec: {sample['surge_spec'].shape}")
         print(f"  surge_params: {sample['surge_params'].shape}")
-        print(f"  sketch_vocal: {sample['sketch_vocal'].shape}")
-        print(f"  sketch_synth: {sample['sketch_synth'].shape}")
+        print(f"  sketch_vocal_spec: {sample['sketch_vocal_spec'].shape}")
+        print(f"  sketch_synth_spec: {sample['sketch_synth_spec'].shape}")
     else:
         print("Test data not found. Skipping test.")
