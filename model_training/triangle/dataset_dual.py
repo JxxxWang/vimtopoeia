@@ -153,8 +153,8 @@ class DualDataset(Dataset):
             spec = spec[:self.max_len_frames, :]
         
         # Normalization (using AST normalization stats)
-        mean = -26.538128995895384
-        std = 39.86343679428101
+        mean = -22.292632
+        std = 38.616500
         spec = (spec - mean) / (std * 2)
         
         return spec
