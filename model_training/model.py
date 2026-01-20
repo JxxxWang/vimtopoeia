@@ -1,51 +1,40 @@
 import torch
 import torch.nn as nn
-from transformers import ASTConfig, ASTModel
-import hdf5plugin
+from transformers import ASTModel
 
 class Vimtopoeia_AST(nn.Module):
     def __init__(self, n_params=22, ast_model_path=None):
-        """
-        Args:
-            n_params: Number of parameters to predict
-            ast_model_path: Path to pretrained AST model directory
-        """
         super().__init__()
         
         if ast_model_path is None:
             raise ValueError("ast_model_path must be provided")
         
-        # Load Pretrained AST (AudioSet)
-        # This is critical for convergence on small datasets
-        self.ast = ASTModel.from_pretrained(
-            ast_model_path,
-            # attn_implementation="sdpa", # Enable if using torch >= 2.1.1 for speedup
-        )
+        # Load Pretrained AST
+        self.ast = ASTModel.from_pretrained(ast_model_path)
         
-        # AST hidden size is 768
-        # Input to FC: 768 (vocal) + 768 (ref) + 3 (osc) = 1539
+        # --- FIX: INPUT SIZE IS 768 (One Audio), NOT 1539 (Two Audio + Osc) ---
         self.fc = nn.Sequential(
-            nn.Linear(768 * 2 + 3, 512),
+            nn.Linear(768, 512),  # Taking the embedding directly
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(512, n_params)
         )
 
-    def forward(self, spec_vocal, spec_ref, osc_one_hot, return_embedding=False):
-        # spec_vocal: [B, 1024, 128]
-        # AST expects: [B, 1024, 128]
+    def forward(self, spec, return_embedding=False):
+        """
+        Args:
+            spec: [Batch, 1024, 128] - The Mel Spectrogram
+            return_embedding: If True, returns the 768-dim vector (The 'Thought')
+                              If False, returns the parameters (The 'Answer')
+        """
+        # 1. Run through Transformer Layers
+        outputs = self.ast(spec)
+        embedding = outputs.pooler_output # Shape: [Batch, 768]
         
-        # Get pooled output (CLS token)
-        # Note: ASTModel handles the patch embedding and positional encoding internally
-        vocal_out = self.ast(spec_vocal).pooler_output # [B, 768]
-        ref_out = self.ast(spec_ref).pooler_output     # [B, 768]
-        
-        # Concatenate to get feature vector [B, 768 + 768 + 3 = 1539]
-        combined = torch.cat([vocal_out, ref_out, osc_one_hot], dim=1)
-        
+        # 2. Consistency Branch
         if return_embedding:
-            # Return raw feature vector
-            return combined
-        else:
-            # Pass through MLP head to predict parameters
-            return self.fc(combined)
+            return embedding
+            
+        # 3. Prediction Branch
+        params = self.fc(embedding)
+        return params

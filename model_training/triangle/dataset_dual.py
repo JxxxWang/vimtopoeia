@@ -11,6 +11,10 @@ import torch
 from torch.utils.data import Dataset
 import torchaudio
 
+# === CONFIGURATION ===
+# Target RMS matches the "loudness" we will force on both Vocals and Synths
+TARGET_RMS = 0.1
+
 
 class DualDataset(Dataset):
     """
@@ -123,6 +127,7 @@ class DualDataset(Dataset):
     def _spec_and_norm(self, waveform: torch.Tensor) -> torch.Tensor:
         """
         Convert waveform to normalized Mel spectrogram for AST.
+        Includes RMS normalization to match training data processing.
         
         Args:
             waveform: Audio tensor, shape (channels, samples) or (samples,)
@@ -137,6 +142,14 @@ class DualDataset(Dataset):
         # Ensure mono
         if waveform.shape[0] > 1:
             waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # === CRITICAL STEP: RMS NORMALIZATION ===
+        # We normalize the volume BEFORE spectrograms
+        # This ensures our Synths have the same energy profile as our future Vocals
+        current_rms = torch.sqrt(torch.mean(waveform**2))
+        if current_rms > 0:
+            waveform = waveform * (TARGET_RMS / (current_rms + 1e-9))
+        # ========================================
         
         # Generate Mel Spec
         spec = self.mel_transform(waveform)
