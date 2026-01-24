@@ -13,6 +13,7 @@ This script:
 
 import torch
 import torchaudio
+import torch.nn as nn
 import numpy as np
 import sys
 import argparse
@@ -33,6 +34,44 @@ from data_generation.surge_xt_param_spec import SURGE_SIMPLE_PARAM_SPEC
 from model_training.model import Vimtopoeia_AST
 from data_generation.core import load_plugin, render_params, write_wav
 from data_generation.surge_xt_param_spec import SURGE_SIMPLE_PARAM_SPEC
+
+
+# Legacy model architecture for v3 checkpoint compatibility
+class Vimtopoeia_AST_v3(nn.Module):
+    """Legacy 3-input AST model for loading v3 checkpoints."""
+    def __init__(self, n_params=29, ast_model_path=None):
+        super().__init__()
+        
+        if ast_model_path is None:
+            raise ValueError("ast_model_path must be provided")
+        
+        from transformers import ASTModel
+        self.ast = ASTModel.from_pretrained(ast_model_path)
+        
+        # Original v3 architecture: 768 (vocal) + 768 (ref) + 3 (one_hot) = 1539
+        self.fc = nn.Sequential(
+            nn.Linear(1539, 512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, n_params)
+        )
+    
+    def forward(self, vocal_spec, ref_spec, one_hot):
+        """
+        Args:
+            vocal_spec: [Batch, 1024, 128]
+            ref_spec: [Batch, 1024, 128]
+            one_hot: [Batch, 3] - oscillator type encoding
+        """
+        vocal_outputs = self.ast(vocal_spec)
+        vocal_embedding = vocal_outputs.pooler_output  # [Batch, 768]
+        
+        ref_outputs = self.ast(ref_spec)
+        ref_embedding = ref_outputs.pooler_output  # [Batch, 768]
+        
+        combined = torch.cat([vocal_embedding, ref_embedding, one_hot], dim=1)  # [Batch, 1539]
+        params = self.fc(combined)
+        return params
 
 
 class VimtopoeiaInference:
@@ -69,22 +108,42 @@ class VimtopoeiaInference:
             print("Trying alternative loading method...")
             checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
         
-        # Detect n_params from checkpoint
-        if 'fc.3.weight' in checkpoint:
+        # Check if this is a full model save or just state_dict
+        if isinstance(checkpoint, dict) and 'fc.3.weight' in checkpoint:
+            # This is a state_dict - detect architecture from it
             checkpoint_n_params = checkpoint['fc.3.weight'].shape[0]
             print(f"ℹ️  Detected {checkpoint_n_params} parameters in checkpoint")
+            
             if checkpoint_n_params != self.n_params:
                 print(f"⚠️  Warning: Checkpoint has {checkpoint_n_params} params, but spec has {self.n_params} params")
                 print(f"Using checkpoint's parameter count: {checkpoint_n_params}")
                 self.n_params = checkpoint_n_params
+            
+            # Try to create model and load
+            self.model = Vimtopoeia_AST_v3(
+                n_params=self.n_params, 
+                ast_model_path=ast_model_path
+            ).to(self.device)
+            
+            try:
+                self.model.load_state_dict(checkpoint, strict=True)
+            except RuntimeError as e:
+                if "size mismatch" in str(e):
+                    print(f"❌ Architecture mismatch detected: {e}")
+                    print("\n⚠️  The checkpoint was trained with a different model architecture.")
+                    print("This usually means the training used different AST features or concatenation.")
+                    print("\nTo fix this, you need to either:")
+                    print("  1. Use the same model architecture that was used during training")
+                    print("  2. Retrain the model with the current architecture")
+                    print("  3. Check if there's a full model save (not just state_dict)")
+                    raise
+                else:
+                    raise
+        else:
+            # Might be a full model save - try loading directly
+            print("⚠️  Checkpoint format not recognized, attempting direct load...")
+            raise ValueError("Unable to load checkpoint - unexpected format")
         
-        # Create model with correct parameter count
-        self.model = Vimtopoeia_AST(
-            n_params=self.n_params, 
-            ast_model_path=ast_model_path
-        ).to(self.device)
-        
-        self.model.load_state_dict(checkpoint)
         self.model.eval()
         
         # Audio processing settings (match training - 44.1kHz)
@@ -259,6 +318,64 @@ class VimtopoeiaInference:
             return torch.from_numpy(normalized).to(audio.device)
         else:
             return normalized
+    
+    def get_loudness_rms(self, audio):
+        """
+        Calculate RMS loudness of audio in dB.
+        
+        Args:
+            audio: Audio array (numpy or torch)
+            
+        Returns:
+            loudness_db: RMS loudness in dB
+        """
+        is_torch = isinstance(audio, torch.Tensor)
+        
+        if is_torch:
+            audio_np = audio.cpu().numpy() if audio.is_cuda else audio.numpy()
+        else:
+            audio_np = audio
+        
+        # Calculate RMS
+        rms = np.sqrt(np.mean(audio_np ** 2))
+        
+        # Convert to dB (with small epsilon to avoid log(0))
+        loudness_db = 20 * np.log10(rms + 1e-10)
+        
+        return loudness_db
+    
+    def match_loudness(self, audio, target_loudness_db):
+        """
+        Adjust audio to match a target loudness level.
+        
+        Args:
+            audio: Audio array (numpy or torch)
+            target_loudness_db: Target loudness in dB (RMS)
+            
+        Returns:
+            matched_audio: Loudness-matched audio (same type as input)
+        """
+        is_torch = isinstance(audio, torch.Tensor)
+        
+        if is_torch:
+            audio_np = audio.cpu().numpy() if audio.is_cuda else audio.numpy()
+        else:
+            audio_np = audio
+        
+        # Get current loudness
+        current_loudness_db = self.get_loudness_rms(audio_np)
+        
+        # Calculate required gain in dB
+        gain_db = target_loudness_db - current_loudness_db
+        gain_linear = 10 ** (gain_db / 20.0)
+        
+        # Apply gain
+        matched = audio_np * gain_linear
+        
+        if is_torch:
+            return torch.from_numpy(matched).to(audio.device)
+        else:
+            return matched
     
     def apply_spectral_convolution(self, vocal, reference_audio, mix_ratio=0.8):
         """
@@ -436,6 +553,10 @@ class VimtopoeiaInference:
         vocal_duration = vocal_waveform.shape[-1] / self.target_sr
         print(f"📏 Vocal duration: {vocal_duration:.2f} seconds")
         
+        # Measure target loudness
+        target_loudness_db = self.get_loudness_rms(vocal_waveform)
+        print(f"🔊 Target loudness: {target_loudness_db:.2f} dB RMS")
+        
         print("\n" + "="*60)
         print("STEP 3: Generate Reference Parameters & Audio")
         print("="*60)
@@ -472,11 +593,13 @@ class VimtopoeiaInference:
             ref_param_array, predicted_delta_direct, midi_note, duration=vocal_duration
         )
         
-        # Normalize and save
-        audio_direct_normalized = self.normalize_audio(audio_direct, target_db=-3.0)
+        # Match loudness to target, then normalize for headroom
+        audio_direct_loudness_matched = self.match_loudness(audio_direct, target_loudness_db)
+        audio_direct_normalized = self.normalize_audio(audio_direct_loudness_matched, target_db=-3.0)
         audio_direct_path = output_dir / "predicted_direct.wav"
         write_wav(audio_direct_normalized, str(audio_direct_path), self.target_sr, 2)
         print(f"💾 Saved direct prediction audio: {audio_direct_path}")
+        print(f"   Loudness matched: {self.get_loudness_rms(audio_direct_loudness_matched):.2f} dB RMS")
         
         params_direct_path = output_dir / "predicted_direct_params.json"
         with open(params_direct_path, 'w') as f:
@@ -528,11 +651,13 @@ class VimtopoeiaInference:
             ref_param_array, predicted_delta_conv, midi_note, duration=vocal_duration
         )
         
-        # Normalize and save
-        audio_conv_normalized = self.normalize_audio(audio_conv, target_db=-3.0)
+        # Match loudness to target, then normalize for headroom
+        audio_conv_loudness_matched = self.match_loudness(audio_conv, target_loudness_db)
+        audio_conv_normalized = self.normalize_audio(audio_conv_loudness_matched, target_db=-3.0)
         audio_conv_path = output_dir / "predicted_convolved.wav"
         write_wav(audio_conv_normalized, str(audio_conv_path), self.target_sr, 2)
         print(f"💾 Saved convolved prediction audio: {audio_conv_path}")
+        print(f"   Loudness matched: {self.get_loudness_rms(audio_conv_loudness_matched):.2f} dB RMS")
         
         params_conv_path = output_dir / "predicted_convolved_params.json"
         with open(params_conv_path, 'w') as f:
