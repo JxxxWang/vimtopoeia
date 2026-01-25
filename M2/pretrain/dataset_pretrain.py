@@ -29,12 +29,13 @@ class SurgePretrainDataset(Dataset):
         # We open the file inside __getitem__ to be safe with multi-worker DataLoaders
         with h5py.File(self.h5_path, 'r') as f:
             # 1. Load Audio
-            # shape in file is usually (length,), we make it (1, length) for Torch
-            audio_np = f['audio'][idx]
-            audio_tensor = torch.from_numpy(audio_np).float().unsqueeze(0)
+            # shape in file is (N, 2, 176400) - stereo audio
+            # We take the mean across channels to get mono: (176400,)
+            audio_np = f['audio'][idx].mean(axis=0)  # Average L/R channels
+            audio_tensor = torch.from_numpy(audio_np).float().unsqueeze(0)  # (1, 176400)
             
             # 2. Load Params
-            params_np = f['params'][idx]
+            params_np = f['param_array'][idx]  # Changed from 'params' to 'param_array'
             params_tensor = torch.from_numpy(params_np).float()
 
         # 3. Apply Augmentation (Only if augmenter is provided)

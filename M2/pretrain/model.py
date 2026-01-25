@@ -3,7 +3,7 @@ import torch.nn as nn
 from transformers import ASTConfig, ASTModel
 
 class M2_AST_Model(nn.Module):
-    def __init__(self, n_params=22):
+    def __init__(self, n_params=73):
         super().__init__()
         
         # 1. Paper Specific Config [cite: 510, 511]
@@ -13,7 +13,7 @@ class M2_AST_Model(nn.Module):
             hidden_size=768,       # Hidden dimension (Base ViT)
             num_hidden_layers=12,  # 12 Encoder layers
             num_attention_heads=12,
-            max_length=1024,       # Supports up to ~10s of audio at 10ms hop
+            max_length=2208,       # Provides exactly 1102 position embeddings for mel spec (220 time × 5 freq)
             qkv_bias=True
         )
         

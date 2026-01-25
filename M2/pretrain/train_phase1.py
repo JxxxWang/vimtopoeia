@@ -5,29 +5,48 @@ from torch.utils.data import DataLoader
 import torchaudio.transforms as T
 import glob
 import os
+import argparse
 from pathlib import Path
+import hdf5plugin
 
 # --- IMPORTS ---
 # Ensure these files are in the same directory or adjust paths
 from dataset_pretrain import SurgePretrainDataset
-from M2.pretrain.augmentations import AudioAugmenter
+from augmentations import AudioAugmenter
 from model import M2_AST_Model
 
 # --- CONFIGURATION ---
-TRAIN_H5_PATH = '/scratch/hw3140/vimtopoeia_m1/data/train.h5'  # Update if in a subfolder
-VAL_H5_PATH = '/scratch/hw3140/vimtopoeia_m1/data/val.h5'      # Update if in a subfolder
-
-# Paths for Convolution IRs
-MIT_IR_PATH = './mit_ir_survey/**/*.wav' 
-VOCAL_IR_PATH = './vimsketch_synth/vocals/*.wav'
-
-BATCH_SIZE = 64
-LR = 5e-5           # DAFx24 Paper Spec
-EPOCHS = 50
 SAMPLE_RATE = 44100
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Use MPS (Apple Silicon) if available, otherwise CUDA, otherwise CPU
+if torch.backends.mps.is_available():
+    DEVICE = torch.device('mps')
+elif torch.cuda.is_available():
+    DEVICE = torch.device('cuda')
+else:
+    DEVICE = torch.device('cpu')
 
 def main():
+    parser = argparse.ArgumentParser(description='M2 Phase 1 Pre-training')
+    parser.add_argument('--train_h5', type=str, required=True, help='Path to training H5 file')
+    parser.add_argument('--val_h5', type=str, required=True, help='Path to validation H5 file')
+    parser.add_argument('--test_h5', type=str, default=None, help='Path to test H5 file (optional)')
+    parser.add_argument('--mit_ir_dir', type=str, default='./mit_ir_survey', help='Path to MIT IR directory')
+    parser.add_argument('--vocal_dir', type=str, default='./vimsketch_synth/vocal', help='Path to vocal IR directory')
+    parser.add_argument('--checkpoints_dir', type=str, default='./M2/pretrain/checkpoints', help='Checkpoint directory')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
+    parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs')
+    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
+    
+    args = parser.parse_args()
+    
+    TRAIN_H5_PATH = args.train_h5
+    VAL_H5_PATH = args.val_h5
+    MIT_IR_PATH = os.path.join(args.mit_ir_dir, '**/*.wav')
+    VOCAL_IR_PATH = os.path.join(args.vocal_dir, '*.wav')
+    BATCH_SIZE = args.batch_size
+    LR = args.learning_rate
+    EPOCHS = args.num_epochs
     print(f"Running on device: {DEVICE}")
 
     # 1. Prepare Impulse Responses
@@ -46,31 +65,33 @@ def main():
     train_dataset = SurgePretrainDataset(h5_path=TRAIN_H5_PATH, augmenter=augmenter)
     val_dataset = SurgePretrainDataset(h5_path=VAL_H5_PATH, augmenter=None)
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=args.num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=args.num_workers)
 
     # 4. Initialize Model
     # Random Init, 64 Bins
-    model = M2_AST_Model(n_params=22).to(DEVICE)
+    model = M2_AST_Model(n_params=73).to(DEVICE)
     
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
 
     # 5. Define Feature Extractor (On GPU)
-    # Must match ASTConfig: 64 Mels
+    # Must match ASTConfig: 64 Mels and produce compatible time frames for 16x16 patches
+    # For 4s audio at 44.1kHz (176400 samples): hop_length=80 gives ~2205 frames
+    # After 16x16 patching: (2205/16) * (64/16) = 137 * 4 = 548 patches
     mel_transform = nn.Sequential(
         T.MelSpectrogram(
             sample_rate=SAMPLE_RATE,
             n_fft=1024,
-            hop_length=512, 
+            hop_length=80,  # Adjusted to produce ~2205 time frames
             n_mels=64   # <--- CRITICAL
         ),
         T.AmplitudeToDB()
     ).to(DEVICE)
 
     # 6. Create checkpoint directory
-    checkpoint_dir = Path('checkpoints/M2')
-    checkpoint_dir.mkdir(exist_ok=True)
+    checkpoint_dir = Path(args.checkpoints_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     # 7. Training Loop
     best_val_loss = float('inf')
@@ -86,6 +107,11 @@ def main():
             # Compute Mel Spec on GPU
             with torch.no_grad():
                 mels = mel_transform(audio)
+            
+            # Debug: Print shapes on first iteration to verify dimensions
+            if train_loss == 0.0:
+                print(f"Audio shape: {audio.shape}")
+                print(f"Mel spec shape: {mels.shape}")
             
             optimizer.zero_grad()
             preds = model(mels)
