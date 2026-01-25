@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import torchaudio.transforms as T
 import glob
 import os
+from pathlib import Path
 
 # --- IMPORTS ---
 # Ensure these files are in the same directory or adjust paths
@@ -67,7 +68,11 @@ def main():
         T.AmplitudeToDB()
     ).to(DEVICE)
 
-    # 6. Training Loop
+    # 6. Create checkpoint directory
+    checkpoint_dir = Path('checkpoints/M2')
+    checkpoint_dir.mkdir(exist_ok=True)
+    
+    # 7. Training Loop
     best_val_loss = float('inf')
     
     for epoch in range(EPOCHS):
@@ -107,12 +112,44 @@ def main():
                 
         avg_val_loss = val_loss / len(val_loader)
         
-        print(f"Epoch {epoch+1}/{EPOCHS} | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
-
+        print(f"Epoch [{epoch+1}/{EPOCHS}] Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}")
+        
+        # Save best model checkpoint
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), 'm2_phase1_best.pth')
-            print("  >>> New Best Model Saved")
+            checkpoint_path = checkpoint_dir / 'm2_phase1_best.pth'
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'best_val_loss': best_val_loss,
+                'config': {
+                    'n_params': 22,
+                    'sample_rate': SAMPLE_RATE,
+                    'n_mels': 64,
+                    'n_fft': 1024,
+                    'hop_length': 512,
+                    'batch_size': BATCH_SIZE,
+                    'learning_rate': LR
+                }
+            }, checkpoint_path)
+            print(f"  >>> New Best Model Saved (Val Loss: {avg_val_loss:.6f})")
+        
+        # Save periodic checkpoint every 10 epochs
+        if (epoch + 1) % 10 == 0:
+            periodic_path = checkpoint_dir / f'm2_phase1_epoch_{epoch+1}.pth'
+            torch.save({
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'best_val_loss': best_val_loss,
+            }, periodic_path)
+            print(f"  >>> Periodic checkpoint saved: epoch {epoch+1}")
+
 
 if __name__ == "__main__":
     main()
