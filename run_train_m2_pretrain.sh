@@ -26,11 +26,11 @@ export HF_HUB_OFFLINE=1
 export HF_HOME=/scratch/hw3140/ast_model_local
 
 # HPC paths
-TRAIN_H5="/scratch/hw3140/roundtwo/vimtopoeia/surge_train.h5"
-VAL_H5="/scratch/hw3140/roundtwo/vimtopoeia/surge_val.h5"
-TEST_H5="/scratch/hw3140/roundtwo/vimtopoeia/surge_test.h5"
-MIT_IR_DIR="/scratch/hw3140/vimtopoeia/datasets/mit_ir_survey"
-VOCAL_DIR="/scratch/hw3140/vimtopoeia/datasets/vimsketch_synth_vocals"
+TRAIN_H5="/scratch/hw3140/vimtopoeia_m1/data/train.h5"
+VAL_H5="/scratch/hw3140/vimtopoeia_m1/data/val.h5"
+TEST_H5="/scratch/hw3140/vimtopoeia_m1/data/test.h5"
+MIT_IR_DIR="/scratch/hw3140/vimtopoeia/MIT_IR"
+VOCAL_DIR="/scratch/hw3140/vimsketch_synth/vocal"
 CHECKPOINTS_DIR="./M2/pretrain/checkpoints"
 
 echo "Starting M2 Phase 1 pre-training on HPC..."
