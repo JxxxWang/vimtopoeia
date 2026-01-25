@@ -47,7 +47,7 @@ python -u M2/pretrain/train_phase1.py \
     --mit_ir_dir "$MIT_IR_DIR" \
     --vocal_dir "$VOCAL_DIR" \
     --checkpoints_dir "$CHECKPOINTS_DIR" \
-    --batch_size 64 \
+    --batch_size 16 \
     --num_epochs 50 \
     --learning_rate 5e-5 \
     --num_workers 4
