@@ -17,6 +17,10 @@ from model import M2_AST_Model
 
 # --- CONFIGURATION ---
 SAMPLE_RATE = 44100
+# Normalization statistics (computed from training set)
+NORM_MEAN = -73.64360046386719
+NORM_STD = 34.576133728027344
+
 # Use MPS (Apple Silicon) if available, otherwise CUDA, otherwise CPU
 if torch.backends.mps.is_available():
     DEVICE = torch.device('mps')
@@ -58,19 +62,25 @@ def main():
     
     # 2. Initialize Augmenter (Train Only)
     # If no IRs found, it will fallback to synthetic noise (safe)
+    print("Initializing augmenter...", flush=True)
     augmenter = AudioAugmenter(ir_files=all_ir_files)
+    print("Augmenter initialized.", flush=True)
 
     # 3. Initialize Datasets
-    print("Loading datasets...")
+    print("Loading datasets...", flush=True)
     train_dataset = SurgePretrainDataset(h5_path=TRAIN_H5_PATH, augmenter=augmenter)
     val_dataset = SurgePretrainDataset(h5_path=VAL_H5_PATH, augmenter=None)
 
+    print("Creating data loaders...", flush=True)
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=args.num_workers)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=args.num_workers)
+    print("Data loaders created.", flush=True)
 
     # 4. Initialize Model
     # Random Init, 64 Bins
+    print("Initializing AST model...", flush=True)
     model = M2_AST_Model(n_params=73).to(DEVICE)
+    print("Model initialized.", flush=True)
     
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=LR)
@@ -94,9 +104,11 @@ def main():
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     
     # 7. Training Loop
+    print("Starting training loop...", flush=True)
     best_val_loss = float('inf')
     
     for epoch in range(EPOCHS):
+        print(f"\nEpoch {epoch+1}/{EPOCHS} starting...", flush=True)
         model.train()
         train_loss = 0.0
         
@@ -107,6 +119,8 @@ def main():
             # Compute Mel Spec on GPU
             with torch.no_grad():
                 mels = mel_transform(audio)
+                # Normalize mel spectrogram
+                mels = (mels - NORM_MEAN) / NORM_STD
             
             # Debug: Print shapes on first iteration to verify dimensions
             if train_loss == 0.0:
@@ -132,6 +146,8 @@ def main():
                 targets = batch['target_params'].to(DEVICE)
                 
                 mels = mel_transform(audio)
+                # Normalize mel spectrogram
+                mels = (mels - NORM_MEAN) / NORM_STD
                 preds = model(mels)
                 loss = criterion(preds, targets)
                 val_loss += loss.item()
@@ -152,7 +168,7 @@ def main():
                 'val_loss': avg_val_loss,
                 'best_val_loss': best_val_loss,
                 'config': {
-                    'n_params': 22,
+                    'n_params': 73,
                     'sample_rate': SAMPLE_RATE,
                     'n_mels': 64,
                     'n_fft': 1024,

@@ -37,6 +37,15 @@ class SurgePretrainDataset(Dataset):
             # 2. Load Params
             params_np = f['param_array'][idx]  # Changed from 'params' to 'param_array'
             params_tensor = torch.from_numpy(params_np).float()
+            
+            # Debug: Print shapes and parameter statistics (only for first few samples)
+            if idx < 3:
+                print(f"\n[Dataset Debug] Sample {idx}:", flush=True)
+                print(f"  audio_np.shape: {audio_np.shape}", flush=True)
+                print(f"  params_tensor.shape: {params_tensor.shape}", flush=True)
+                print(f"  params_tensor min/max: [{params_tensor.min():.4f}, {params_tensor.max():.4f}]", flush=True)
+                print(f"  params_tensor mean/std: {params_tensor.mean():.4f} / {params_tensor.std():.4f}", flush=True)
+                print(f"  Sample param values (first 10): {params_tensor[:10].tolist()}", flush=True)
 
         # 3. Apply Augmentation (Only if augmenter is provided)
         # Note: Input to augmenter is Tensor, Output is Tensor
