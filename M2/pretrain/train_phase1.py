@@ -39,7 +39,7 @@ def main():
     parser.add_argument('--checkpoints_dir', type=str, default='./M2/pretrain/checkpoints', help='Checkpoint directory')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--num_epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of data loader workers')
     
     args = parser.parse_args()
@@ -93,7 +93,7 @@ def main():
         T.MelSpectrogram(
             sample_rate=SAMPLE_RATE,
             n_fft=1024,
-            hop_length=80,  # Adjusted to produce ~2205 time frames
+            hop_length=512,  # Adjusted to produce ~2205 time frames
             n_mels=64   # <--- CRITICAL
         ),
         T.AmplitudeToDB()
